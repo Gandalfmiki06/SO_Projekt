@@ -1,41 +1,60 @@
 #include "hala.h"
 #include <pthread.h>
 #include <stdlib.h>
-
-void* kasa(void*);
-void* kibic(void*);
-void* techniczny(void*);
-void* kierownik(void*);
+#include <unistd.h>
+#include <time.h>
 
 int main() {
-    printf("Start symulacji\n");
+    srand(time(NULL));
 
-    pthread_t kasy[MAX_KASY];
-    pthread_t kibice[K];
-    pthread_t tech[SEKTORY];
-    pthread_t boss;
-
+    /* inicjalizacja sektorów */
     for (int i = 0; i < SEKTORY; i++) {
         miejsca[i] = K / SEKTORY;
-        sem_init(&kontrola[i][0], 0, 3);
-        sem_init(&kontrola[i][1], 0, 3);
     }
 
-    pthread_create(&boss, NULL, kierownik, NULL);
+    pthread_t kasy[MAX_KASY];
+    int kasa_id[MAX_KASY];
 
-    for (int i = 0; i < MAX_KASY; i++)
-        pthread_create(&kasy[i], NULL, kasa, NULL);
+    pthread_t kibice[K];
+    Kibic dane[K];
 
-    for (int i = 0; i < SEKTORY; i++)
-        pthread_create(&tech[i], NULL, techniczny, &i);
+    /* start z 2 kasami */
+    for (int i = 0; i < 2; i++) {
+        kasa_id[i] = i;
+        pthread_create(&kasy[i], NULL, kasa, &kasa_id[i]);
+    }
 
+    /* tworzenie kibiców */
     for (int i = 0; i < K; i++) {
-        int* s = malloc(sizeof(int));
-        *s = rand() % SEKTORY;
-        pthread_create(&kibice[i], NULL, kibic, s);
+        dane[i].id = i;
+        dane[i].vip = (rand() % 1000 < 3); // <0.3%
+        dane[i].bilety = 0;
+        pthread_create(&kibice[i], NULL, kibic, &dane[i]);
+        usleep(100000);
     }
 
-    pthread_join(boss, NULL);
-    printf("Koniec symulacji\n");
+    /* dynamiczne sterowanie kasami */
+    while (sprzedane < K) {
+        pthread_mutex_lock(&mutex_kasy);
+
+        int wymagane = kibice_w_kolejce / (K / 10) + 1;
+        if (wymagane < 2) wymagane = 2;
+        if (wymagane > MAX_KASY) wymagane = MAX_KASY;
+
+        while (czynne_kasy < wymagane) {
+            kasa_id[czynne_kasy] = czynne_kasy;
+            pthread_create(&kasy[czynne_kasy], NULL, kasa,
+                           &kasa_id[czynne_kasy]);
+            czynne_kasy++;
+            loguj("Otwarto nową kase");
+        }
+
+        pthread_mutex_unlock(&mutex_kasy);
+        sleep(1);
+    }
+
+    sleep(2);
+    loguj("Sprzedano wszystkie bilety – koniec");
+
     return 0;
 }
