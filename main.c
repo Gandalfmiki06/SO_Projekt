@@ -1,60 +1,51 @@
 #include "hala.h"
-#include <pthread.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <time.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include "hala.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>   // usleep
 
-int main() {
-    srand(time(NULL));
-
-    /* inicjalizacja sektorów */
+int main()
+{
     for (int i = 0; i < SEKTORY; i++) {
         miejsca[i] = K / SEKTORY;
+        for (int j = 0; j < 2; j++)
+            sem_init(&kontrola[i][j], 0, 3);
     }
 
-    pthread_t kasy[MAX_KASY];
-    int kasa_id[MAX_KASY];
+    pthread_t kasy[MAX_KASY], kibice[50], t_kier, t_tech;
 
-    pthread_t kibice[K];
-    Kibic dane[K];
+    pthread_create(&t_kier, NULL, kierownik, NULL);
+    pthread_create(&t_tech, NULL, techniczny, NULL);
 
-    /* start z 2 kasami */
-    for (int i = 0; i < 2; i++) {
-        kasa_id[i] = i;
-        pthread_create(&kasy[i], NULL, kasa, &kasa_id[i]);
+    for (int i = 0; i < MAX_KASY; i++)
+        pthread_create(&kasy[i], NULL, kasa, NULL);
+
+    for (int i = 0; i < 50; i++) {
+        Kibic* k = malloc(sizeof(Kibic));
+        k->id = i;
+        k->vip = (i % 20 == 0);
+        k->wiek = 20;
+        k->druzyna = i % 2;
+        k->bilety = 1 + rand() % 2;
+        k->sektor = rand() % SEKTORY;
+        pthread_create(&kibice[i], NULL, kibic, k);
+        usleep(50000);
     }
 
-    /* tworzenie kibiców */
-    for (int i = 0; i < K; i++) {
-        dane[i].id = i;
-        dane[i].vip = (rand() % 1000 < 3); // <0.3%
-        dane[i].bilety = 0;
-        pthread_create(&kibice[i], NULL, kibic, &dane[i]);
-        usleep(100000);
-    }
+    /* czekamy na wątki */
+for (int i = 0; i < MAX_KASY; i++)
+    pthread_join(kasy[i], NULL);
 
-    /* dynamiczne sterowanie kasami */
-    while (sprzedane < K) {
-        pthread_mutex_lock(&mutex_kasy);
+for (int i = 0; i < 50; i++)
+    pthread_join(kibice[i], NULL);
 
-        int wymagane = kibice_w_kolejce / (K / 10) + 1;
-        if (wymagane < 2) wymagane = 2;
-        if (wymagane > MAX_KASY) wymagane = MAX_KASY;
+pthread_join(t_kier, NULL);
+pthread_join(t_tech, NULL);
 
-        while (czynne_kasy < wymagane) {
-            kasa_id[czynne_kasy] = czynne_kasy;
-            pthread_create(&kasy[czynne_kasy], NULL, kasa,
-                           &kasa_id[czynne_kasy]);
-            czynne_kasy++;
-            loguj("Otwarto nową kase");
-        }
+loguj("Koniec symulacji");
+return 0;
 
-        pthread_mutex_unlock(&mutex_kasy);
-        sleep(1);
-    }
-
-    sleep(2);
-    loguj("Sprzedano wszystkie bilety – koniec");
-
-    return 0;
 }
