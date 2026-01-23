@@ -1,16 +1,15 @@
 #include "hala.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <unistd.h>
 
-void* kasa(void* arg) {
-    int id = *(int*)arg;
-
+void* kasa(void* arg)
+{
     while (1) {
         pthread_mutex_lock(&mutex_kolejka);
 
-        while (q_size == 0 && sprzedane < K) {
+        while (q_size == 0 && sprzedane < K)
             pthread_cond_wait(&cond_kolejka, &mutex_kolejka);
-        }
 
         if (sprzedane >= K) {
             pthread_mutex_unlock(&mutex_kolejka);
@@ -25,29 +24,16 @@ void* kasa(void* arg) {
         pthread_mutex_unlock(&mutex_kolejka);
 
         pthread_mutex_lock(&mutex_bilety);
-
-        if (sprzedane >= K) {
-            pthread_mutex_unlock(&mutex_bilety);
-            break;
-        }
-
-        int sektor = rand() % SEKTORY;
-        int ile = (miejsca[sektor] >= 2) ? 2 : miejsca[sektor];
-
-        if (ile > 0) {
-            miejsca[sektor] -= ile;
-            sprzedane += ile;
-
-            k->sektor = sektor;
-            k->bilety = ile;
-
+        if (sprzedane + k->bilety <= K && miejsca[k->sektor] >= k->bilety) {
+            miejsca[k->sektor] -= k->bilety;
+            sprzedane += k->bilety;
             loguj("Kasa: sprzedano bilety");
         }
-
         pthread_mutex_unlock(&mutex_bilety);
-        sleep(1);
+
+        usleep(100000);
     }
 
-    loguj("Kasa: zamknięta");
+    loguj("Kasa: zamknieta");
     return NULL;
 }
