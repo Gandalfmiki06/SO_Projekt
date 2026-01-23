@@ -1,39 +1,36 @@
 #include "hala.h"
 #include <stdlib.h>
-#include <stdio.h>
 #include <unistd.h>
+#include <stdio.h>
 
-void* kasa(void* arg)
+void* kibic(void* arg)
 {
-    while (1) {
-        pthread_mutex_lock(&mutex_kolejka);
+    Kibic* k = (Kibic*)arg;
 
-        while (q_size == 0 && sprzedane < K)
-            pthread_cond_wait(&cond_kolejka, &mutex_kolejka);
+    pthread_mutex_lock(&mutex_kolejka);
+    kolejka[q_end] = k;
+    q_end = (q_end + 1) % MAX_KOLEJKA;
+    q_size++;
+    kibice_w_kolejce++;
+    pthread_cond_signal(&cond_kolejka);
+    pthread_mutex_unlock(&mutex_kolejka);
 
-        if (sprzedane >= K) {
-            pthread_mutex_unlock(&mutex_kolejka);
-            break;
-        }
+    char buf[100];
+    snprintf(buf, sizeof(buf), "Kibic %d w kolejce", k->id);
+    loguj(buf);
 
-        Kibic* k = kolejka[q_start];
-        q_start = (q_start + 1) % MAX_KOLEJKA;
-        q_size--;
-        kibice_w_kolejce--;
+    /* ===== WEJŚCIE ===== */
 
-        pthread_mutex_unlock(&mutex_kolejka);
+    pthread_mutex_lock(&mutex_wejsc);
+    while (stop_wejsc)
+        pthread_cond_wait(&cond_wejsc, &mutex_wejsc);
+    pthread_mutex_unlock(&mutex_wejsc);
 
-        pthread_mutex_lock(&mutex_bilety);
-        if (sprzedane + k->bilety <= K && miejsca[k->sektor] >= k->bilety) {
-            miejsca[k->sektor] -= k->bilety;
-            sprzedane += k->bilety;
-            loguj("Kasa: sprzedano bilety");
-        }
-        pthread_mutex_unlock(&mutex_bilety);
-
-        usleep(100000);
+    if (!k->vip) {
+        sem_wait(&kontrola[k->sektor][0]);
+        sem_post(&kontrola[k->sektor][0]);
     }
 
-    loguj("Kasa: zamknieta");
+    loguj("Kibic wszedl do sektora");
     return NULL;
 }
