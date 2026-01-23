@@ -3,23 +3,21 @@
 
 #include <pthread.h>
 #include <semaphore.h>
-#include <stdio.h>
-#include <stdbool.h>
 
 #define SEKTORY 8
+#define MAX_KOLEJKA 200
 #define MAX_KASY 10
-#define MAX_KOLEJKA 1000
-
-/* ===== STRUKTURY ===== */
 
 typedef struct {
     int id;
-    int vip;        // 1 = VIP
+    int vip;
+    int wiek;
+    int druzyna;
+    int bilety;
     int sektor;
-    int bilety;     // 0–2
 } Kibic;
 
-/* ===== ZASOBY WSPÓLNE ===== */
+/* ===== GLOBALNE ===== */
 
 extern int K;
 extern int miejsca[SEKTORY];
@@ -33,8 +31,7 @@ extern pthread_mutex_t mutex_kasy;
 /* ===== KOLEJKA ===== */
 
 extern Kibic* kolejka[MAX_KOLEJKA];
-extern int q_start, q_end, q_size;
-extern int kibice_w_kolejce;
+extern int q_start, q_end, q_size, kibice_w_kolejce;
 
 extern pthread_mutex_t mutex_kolejka;
 extern pthread_cond_t cond_kolejka;
@@ -43,23 +40,27 @@ extern pthread_cond_t cond_kolejka;
 
 extern pthread_mutex_t mutex_bilety;
 
+/* ===== WEJŚCIA ===== */
+
+extern sem_t kontrola[SEKTORY][2];   // 2 stanowiska
+extern pthread_mutex_t mutex_wejsc;
+
+/* ===== KIEROWNIK ===== */
+
+extern int stop_wejsc;
+extern int ewakuacja;
+extern pthread_cond_t cond_wejsc;
+
 /* ===== LOG ===== */
 
-extern pthread_mutex_t mutex_log;
 void loguj(const char* tekst);
+
+#endif
+
 
 /* ===== FUNKCJE WĄTKÓW ===== */
 
 void* kasa(void* arg);
 void* kibic(void* arg);
-
-/* ===== WEJŚCIA / EWAKUACJA ===== */
-
-extern int stop_wejsc;
-extern int ewakuacja;
-
-extern pthread_mutex_t mutex_wejsc;
-extern pthread_cond_t cond_wejsc;
-
-
-#endif
+void* kierownik(void* arg);
+void* techniczny(void* arg);
