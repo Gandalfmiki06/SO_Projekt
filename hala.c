@@ -1,123 +1,165 @@
-#ifndef HALA_H
-#define HALA_H
-
-#include <pthread.h>
-#include <semaphore.h>
-#include <signal.h>
+#include "hala.h"
+#include <stdio.h>
+#include <unistd.h>
 #include <time.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/stat.h>
 
-#define SEKTORY 8
-#define MAX_KOLEJKA 2000
-#define MAX_KASY 10
+/* Domyślne wartości */
+int K = 80;
+int miejsca[SEKTORY];
+int sprzedane = 0;
 
-typedef struct {
-    int id;
-    int vip;
-    int wiek;
-    int druzyna;
-    int bilety;           /* pierwotne zamówienie (informacyjne) */
-    int to_enter;         /* ile osób faktycznie ma wejść (ustawiane przez kasę) */
-    int sektor;           /* -1: sektor wybierze kasa; -2: anulowany; -10: sektor VIP */
-    int guardian_id;
-    int guardian_for;
-    int pass_count;
-    int waiting_for_control;
-    int urgent;
-    int in_queue;
-    int processing;
-    int requeue_attempts; /* ile razy już requeue'owano tego kibica */
-} Kibic;
+/* Definicja licznika sprzedanych biletów na sektor */
+int sold_per_sector[SEKTORY];
 
-/* ===== GLOBALNE ===== */
-extern int K;
-extern int miejsca[SEKTORY];
-extern int sprzedane;
+int osoby_w_sektorze[SEKTORY] = {0};
+int stop_sektor[SEKTORY] = {0};
 
-/* ===== SEKTORY ===== */
-extern int osoby_w_sektorze[SEKTORY];
-extern int stop_sektor[SEKTORY];
+/* SEKTOR VIP */
+int miejsca_vip = 0;
+int osoby_w_sektorze_vip = 0;
+int sprzedane_vip = 0;
 
-/* ===== SEKTOR VIP ===== */
-extern int miejsca_vip;
-extern int osoby_w_sektorze_vip;
-extern int sprzedane_vip;
+int stat_vip = 0, stat_normalni = 0, stat_dzieci = 0, stat_wejsc = 0;
+int stat_vip_wejsc = 0;
 
-/* ===== STATYSTYKI ===== */
-extern int stat_vip;
-extern int stat_normalni;
-extern int stat_dzieci;
-extern int stat_wejsc;
-extern int stat_vip_wejsc;
-extern int urgent_count;
+int urgent_count = 0;
 
-/* dodatkowe liczniki diagnostyczne */
-extern int timeout_count;
-extern int requeue_count;
+/* diagnostyka */
+int timeout_count = 0;
+int requeue_count = 0;
 
-/* ===== KASY ===== */
-extern int czynne_kasy;
-extern pthread_mutex_t mutex_kasy;
+int czynne_kasy = 2;
+pthread_mutex_t mutex_kasy = PTHREAD_MUTEX_INITIALIZER;
 
-/* ===== KOLEJKI (statyczne) ===== */
-extern Kibic* kolejka[MAX_KOLEJKA];
-extern Kibic* kolejka_vip[MAX_KOLEJKA];
-extern int q_start;
-extern int q_end;
-extern int q_size;
-extern int qv_start;
-extern int qv_end;
-extern int qv_size;
-extern int kibice_w_kolejce;
+/* Statyczne kolejki */
+Kibic* kolejka[MAX_KOLEJKA];
+Kibic* kolejka_vip[MAX_KOLEJKA];
+int q_start = 0, q_end = 0, q_size = 0;
+int qv_start = 0, qv_end = 0, qv_size = 0;
+int kibice_w_kolejce = 0;
 
-/* tablica wskaźników na wszystkie utworzone struktury Kibic */
-extern Kibic* created_kibice[MAX_KOLEJKA];
+/* tablica wskaźników na utworzone struktury kibiców */
+Kibic* created_kibice[MAX_KOLEJKA];
 
-extern pthread_mutex_t mutex_kolejka;
-extern pthread_cond_t cond_kolejka;
+pthread_mutex_t mutex_kolejka = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond_kolejka = PTHREAD_COND_INITIALIZER;
 
-/* ===== BILETY ===== */
-extern pthread_mutex_t mutex_bilety;
+pthread_mutex_t mutex_bilety = PTHREAD_MUTEX_INITIALIZER;
 
-/* ===== WEJŚCIA ===== */
-extern sem_t kontrola[SEKTORY][2];
-extern int stanowisko_druzyna[SEKTORY][2];
-extern int stanowisko_count[SEKTORY][2];
-extern int waiting_count[SEKTORY];
-extern pthread_mutex_t mutex_wejsc;
+sem_t kontrola[SEKTORY][2];
+int stanowisko_druzyna[SEKTORY][2];
+int stanowisko_count[SEKTORY][2];
+int waiting_count[SEKTORY];
+pthread_mutex_t mutex_wejsc = PTHREAD_MUTEX_INITIALIZER;
 
-/* pomocnicze struktury */
-extern int entered_flag[MAX_KOLEJKA];
-extern int adults_entered_in_sector[SEKTORY];
+int entered_flag[MAX_KOLEJKA];
+int adults_entered_in_sector[SEKTORY];
 
-/* ===== KIEROWNIK ===== */
-extern int ewakuacja;
-extern pthread_cond_t cond_wejsc;
+int ewakuacja = 0;
+pthread_cond_t cond_wejsc = PTHREAD_COND_INITIALIZER;
 
-/* ===== SYGNAŁY ===== */
-extern volatile sig_atomic_t przerwanie;
-extern int sig_pipe[2];
+volatile sig_atomic_t przerwanie = 0;
+int sig_pipe[2] = {-1, -1};
 
-/* ===== REMAINING ARRIVALS ===== */
-extern volatile sig_atomic_t remaining_arrivals;
+volatile sig_atomic_t remaining_arrivals = 0;
 
-/* ===== LOG i RAPORT ===== */
-void loguj(const char* tekst);
-void zapisz_podsumowanie(void);
+pthread_mutex_t mutex_log = PTHREAD_MUTEX_INITIALIZER;
 
-/* ===== INNE ===== */
-extern int max_vip;
-extern int next_kibic_id;
+int max_vip = 0;
+int next_kibic_id = 0;
 
-/* ===== CZAS MECZU ===== */
-extern time_t Tp;
+/* Czas rozpoczęcia meczu */
+time_t Tp = 0;
 
-/* ===== WĄTKI ===== */
-void* kasa(void* arg);
-void* kibic(void* arg);
-void* kierownik(void* arg);
-void* techniczny(void* arg);
+/* Bezpieczne logowanie */
+void loguj(const char* tekst)
+{
+    char buf[1024];
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    char timestr[64];
+    strftime(timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S", &tm);
 
-/* ===== DODANE: sprzedane na sektorach ===== */
-extern int sold_per_sector[SEKTORY];
+    int len = snprintf(buf, sizeof(buf), "[%s] [TID=%lu] %s\n",
+                       timestr, (unsigned long)pthread_self(), tekst);
+    if(len <= 0) return;
 
-#endif
+    pthread_mutex_lock(&mutex_log);
+    int fd = open("raport.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if(fd == -1){
+        pthread_mutex_unlock(&mutex_log);
+        return;
+    }
+    ssize_t written = 0;
+    while(written < len){
+        ssize_t w = write(fd, buf + written, (size_t)(len - written));
+        if(w <= 0) break;
+        written += w;
+    }
+    close(fd);
+    pthread_mutex_unlock(&mutex_log);
+}
+
+/* Zapis podsumowania z rozbiciem na sektory + VIP */
+void zapisz_podsumowanie()
+{
+    char buf[512];
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+
+    pthread_mutex_lock(&mutex_log);
+    int fd = open("raport.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if(fd != -1){
+        char header[256];
+        int hlen = snprintf(header, sizeof(header),
+                            "\n=== PODSUMOWANIE =====\nCzas: %04d-%02d-%02d %02d:%02d:%02d\nSprzedane: %d\nVIP: %d\nNormalni: %d\nDzieci: %d\nWeszli: %d\nSprzedane VIP: %d\n",
+                            tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
+                            tm.tm_hour, tm.tm_min, tm.tm_sec,
+                            sprzedane, stat_vip, stat_normalni, stat_dzieci, stat_wejsc,
+                            sprzedane_vip);
+        write(fd, header, hlen);
+
+        char line[512];
+        int len = snprintf(line, sizeof(line), "Sprzedane na sektorach: ");
+        write(fd, line, len);
+        for(int i=0;i<SEKTORY;i++){
+            int sprzedane_sektor = sold_per_sector[i];
+            if(sprzedane_sektor < 0) sprzedane_sektor = 0;
+            int l = snprintf(line, sizeof(line), "%d%s", sprzedane_sektor, (i<SEKTORY-1?"; ":"\n"));
+            write(fd, line, l);
+        }
+        len = snprintf(line, sizeof(line), "Miejsca pozostale na sektory: ");
+        write(fd, line, len);
+        for(int i=0;i<SEKTORY;i++){
+            int l = snprintf(line, sizeof(line), "%d%s", miejsca[i], (i<SEKTORY-1?"; ":"\n"));
+            write(fd, line, l);
+        }
+        int lvip = snprintf(line, sizeof(line),
+                            "VIP: miejsca_pozostale=%d sprzedane_vip=%d osoby_w_sektorze_vip=%d\n",
+                            miejsca_vip, sprzedane_vip, osoby_w_sektorze_vip);
+        write(fd, line, lvip);
+
+        int l2 = snprintf(line, sizeof(line), "VIP wejscia: %d\n", stat_vip_wejsc);
+        write(fd, line, l2);
+        int l3 = snprintf(line, sizeof(line), "Urgent: %d\n", urgent_count);
+        write(fd, line, l3);
+        int l4 = snprintf(line, sizeof(line), "Timeouts: %d Requeues: %d\n", timeout_count, requeue_count);
+        write(fd, line, l4);
+        write(fd, "\n", 1);
+        close(fd);
+    }
+    pthread_mutex_unlock(&mutex_log);
+
+    snprintf(buf, sizeof(buf),
+             "Zapisano podsumowanie: Sprzedane=%d VIP=%d Normalni=%d Dzieci=%d Weszli=%d Urgent=%d Sprzedane_VIP=%d Miejsca_VIP=%d Timeouts=%d Requeues=%d",
+             sprzedane, stat_vip, stat_normalni, stat_dzieci, stat_wejsc, urgent_count,
+             sprzedane_vip, miejsca_vip, timeout_count, requeue_count);
+    loguj(buf);
+}
