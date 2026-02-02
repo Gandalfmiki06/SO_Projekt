@@ -34,8 +34,8 @@ static void* debug_thread(void* arg)
         for(int s=0;s<SEKTORY;s++) waiting_total += waiting_count[s];
         pthread_mutex_unlock(&mutex_wejsc);
 
-        snprintf(buf, sizeof(buf), "DEBUG: q=%d qv=%d kibice_w_kolejce=%d sold=%d waiting_total=%d czynne_kasy=%d",
-                 q, qv, kw, sold, waiting_total, czynne_kasy);
+        snprintf(buf, sizeof(buf), "DEBUG: q=%d qv=%d kibice_w_kolejce=%d sold=%d waiting_total=%d czynne_kasy=%d timeouts=%d requeues=%d",
+                 q, qv, kw, sold, waiting_total, czynne_kasy, timeout_count, requeue_count);
         loguj(buf);
         sleep(5);
     }
@@ -129,6 +129,8 @@ static void init_simulation(int NUM_KIBIC)
     ewakuacja = 0;
     przerwanie = 0;
     urgent_count = 0;
+    timeout_count = 0;
+    requeue_count = 0;
 }
 
 /* --- main --- */
@@ -258,6 +260,7 @@ int main(int argc, char** argv)
         k->urgent = 0;
         k->in_queue = 0;
         k->processing = 0;
+        k->requeue_attempts = 0;
 
         pthread_mutex_lock(&mutex_kolejka);
         if(k->id >= 0 && k->id < MAX_KOLEJKA) created_kibice[k->id] = k;
