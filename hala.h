@@ -25,6 +25,7 @@ typedef struct {
     int urgent;
     int in_queue;
     int processing;
+    int requeue_attempts; /* ile razy już requeue'owano tego kibica */
 } Kibic;
 
 /* ===== GLOBALNE ===== */
@@ -48,6 +49,10 @@ extern int stat_dzieci;
 extern int stat_wejsc;
 extern int stat_vip_wejsc;
 extern int urgent_count;
+
+/* dodatkowe liczniki diagnostyczne */
+extern int timeout_count;
+extern int requeue_count;
 
 /* ===== KASY ===== */
 extern int czynne_kasy;
