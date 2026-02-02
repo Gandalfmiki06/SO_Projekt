@@ -7,11 +7,12 @@
 #include <string.h>
 
 /*
-    WERSJA BEZ KORUPCJI PAMIĘCI:
+    WERSJA STABILNA:
     - kibic NIGDY nie usuwa się z kolejki
     - kibic NIGDY nie robi free(k)
-    - kibic przy timeout ustawia sektor = -2 i kończy wątek
-    - kasa widząc sektor = -2 ignoruje kibica
+    - timeout = sektor = -2 (anulowany)
+    - kasa ignoruje anulowanych
+    - wejścia liczone poprawnie wg to_enter
 */
 
 static void enqueue_kibic_local(Kibic* k)
@@ -43,7 +44,7 @@ void* kibic(void* arg)
     Kibic* k = (Kibic*)arg;
     char buf[256];
 
-    /* losowe opóźnienie przyjścia */
+    /* opóźnienie przyjścia */
     usleep((rand()%3000) * 1000);
 
     /* log przyjścia */
@@ -72,7 +73,7 @@ void* kibic(void* arg)
 
     enqueue_kibic_local(k);
 
-    /* timeout oczekiwania na sektor */
+    /* timeout oczekiwania */
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 120;
@@ -91,17 +92,17 @@ void* kibic(void* arg)
             return NULL;
         }
 
-        /* VIP czeka tylko na to_enter */
+        /* VIP */
         if(k->vip){
             if(k->to_enter > 0) break;
 
             int rc = pthread_cond_timedwait(&cond_wejsc, &mutex_wejsc, &ts);
             if(rc == ETIMEDOUT){
                 snprintf(buf, sizeof(buf),
-                         "Kibic %d (VIP): timeout oczekiwania — opuszcza", k->id);
+                         "Kibic %d (VIP): timeout — opuszcza", k->id);
                 loguj(buf);
 
-                k->sektor = -2;   // oznacz jako anulowany
+                k->sektor = -2;
                 pthread_mutex_unlock(&mutex_wejsc);
                 __sync_fetch_and_sub(&remaining_arrivals, 1);
                 return NULL;
@@ -127,10 +128,10 @@ void* kibic(void* arg)
             int rc = pthread_cond_timedwait(&cond_wejsc, &mutex_wejsc, &ts);
             if(rc == ETIMEDOUT){
                 snprintf(buf, sizeof(buf),
-                         "Kibic %d: timeout oczekiwania — opuszcza", k->id);
+                         "Kibic %d: timeout — opuszcza", k->id);
                 loguj(buf);
 
-                k->sektor = -2;   // oznacz jako anulowany
+                k->sektor = -2;
                 pthread_mutex_unlock(&mutex_wejsc);
                 __sync_fetch_and_sub(&remaining_arrivals, 1);
                 return NULL;
@@ -240,16 +241,22 @@ void* kibic(void* arg)
     }
     else if(k->sektor >= 0){
         pthread_mutex_lock(&mutex_wejsc);
-        osoby_w_sektorze[k->sektor]++;
+
+        int wejsc = (k->to_enter > 0) ? k->to_enter : 1;
+
+        osoby_w_sektorze[k->sektor] += wejsc;
         entered_flag[k->id] = 1;
+
         if(k->wiek >= 15)
             adults_entered_in_sector[k->sektor]++;
+
         pthread_mutex_unlock(&mutex_wejsc);
 
-        __sync_fetch_and_add(&stat_wejsc, 1);
+        __sync_fetch_and_add(&stat_wejsc, wejsc);
 
         snprintf(buf, sizeof(buf),
-                 "Kibic %d wszedl do sektora %d", k->id, k->sektor);
+                 "Kibic %d wszedl do sektora %d (bilety=%d)",
+                 k->id, k->sektor, wejsc);
         loguj(buf);
     }
     else {
@@ -277,11 +284,16 @@ void* kibic(void* arg)
         loguj(buf);
     } else {
         pthread_mutex_lock(&mutex_wejsc);
-        if(osoby_w_sektorze[k->sektor] > 0)
-            osoby_w_sektorze[k->sektor]--;
+
+        int wejsc = (k->to_enter > 0) ? k->to_enter : 1;
+
+        if(osoby_w_sektorze[k->sektor] >= wejsc)
+            osoby_w_sektorze[k->sektor] -= wejsc;
+
         if(k->wiek >= 15 &&
            adults_entered_in_sector[k->sektor] > 0)
             adults_entered_in_sector[k->sektor]--;
+
         pthread_mutex_unlock(&mutex_wejsc);
 
         snprintf(buf, sizeof(buf),
