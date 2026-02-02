@@ -5,6 +5,13 @@
 #include <time.h>
 #include <string.h>
 
+/*
+  Poprawiony kasa.c
+  - ignoruje anulowanych (sektor == -2)
+  - requeue z limitem prób (3)
+  - krótsze usleep (szybsza obsługa)
+*/
+
 static int all_queue_need_two_and_no_sector(void)
 {
     int all_need_two = 1;
@@ -41,6 +48,41 @@ static int all_queue_need_two_and_no_sector(void)
     return (!found_block && all_need_two) ? 1 : 0;
 }
 
+/* requeue helpers */
+static int requeue_normal(Kibic* k)
+{
+    pthread_mutex_lock(&mutex_kolejka);
+    if(q_size >= MAX_KOLEJKA){
+        pthread_mutex_unlock(&mutex_kolejka);
+        return 0;
+    }
+    kolejka[q_end] = k;
+    q_end = (q_end + 1) % MAX_KOLEJKA;
+    q_size++;
+    k->in_queue = 1;
+    pthread_cond_broadcast(&cond_kolejka);
+    pthread_mutex_unlock(&mutex_kolejka);
+    __sync_fetch_and_add(&requeue_count, 1);
+    return 1;
+}
+
+static int requeue_vip(Kibic* k)
+{
+    pthread_mutex_lock(&mutex_kolejka);
+    if(qv_size >= MAX_KOLEJKA){
+        pthread_mutex_unlock(&mutex_kolejka);
+        return 0;
+    }
+    kolejka_vip[qv_end] = k;
+    qv_end = (qv_end + 1) % MAX_KOLEJKA;
+    qv_size++;
+    k->in_queue = 1;
+    pthread_cond_broadcast(&cond_kolejka);
+    pthread_mutex_unlock(&mutex_kolejka);
+    __sync_fetch_and_add(&requeue_count, 1);
+    return 1;
+}
+
 void* kasa(void* arg)
 {
     int id = (int)(size_t)arg;
@@ -51,7 +93,7 @@ void* kasa(void* arg)
         pthread_mutex_lock(&mutex_kasy);
         if(id >= czynne_kasy){
             pthread_mutex_unlock(&mutex_kasy);
-            usleep(50000);
+            usleep(1000);
             continue;
         }
         pthread_mutex_unlock(&mutex_kasy);
@@ -79,7 +121,6 @@ void* kasa(void* arg)
             q_size--;
             if(kibice_w_kolejce > 0) kibice_w_kolejce--;
         }
-
         if(k){
             k->in_queue = 0;
             k->processing = 1;
@@ -87,14 +128,21 @@ void* kasa(void* arg)
         pthread_mutex_unlock(&mutex_kolejka);
 
         if(!k){
-            usleep(20000);
+            usleep(500);
+            continue;
+        }
+
+        /* jeśli kibic został wcześniej anulowany, zignoruj go */
+        if(k->sektor == -2){
+            k->processing = 0;
+            usleep(500);
             continue;
         }
 
         snprintf(buf, sizeof(buf), "Kasa %d: pobral kibica %d (bilety=%d vip=%d)", id, k->id, k->bilety, k->vip);
         loguj(buf);
 
-        /* OBSŁUGA VIP – osobny sektor, bez przydziału zwykłego sektora */
+        /* OBSŁUGA VIP */
         if(k->vip){
             pthread_mutex_lock(&mutex_bilety);
             if(miejsca_vip > 0){
@@ -104,7 +152,7 @@ void* kasa(void* arg)
                 pthread_mutex_lock(&mutex_wejsc);
                 pthread_mutex_lock(&mutex_kolejka);
                 k->to_enter = 1;
-                k->sektor = -10; /* znacznik: sektor VIP */
+                k->sektor = -10; /* sektor VIP */
                 k->processing = 0;
                 pthread_cond_broadcast(&cond_kolejka);
                 pthread_mutex_unlock(&mutex_kolejka);
@@ -116,22 +164,22 @@ void* kasa(void* arg)
                 snprintf(buf, sizeof(buf), "Kasa %d: sprzedano bilet VIP dla kibica %d (miejsca_vip=%d)", id, k->id, miejsca_vip);
                 loguj(buf);
             } else {
-                pthread_mutex_lock(&mutex_kolejka);
-                k->processing = 0;
-                pthread_mutex_unlock(&mutex_kolejka);
-
-                k->sektor = -2;
-                pthread_mutex_lock(&mutex_wejsc);
-                pthread_cond_broadcast(&cond_wejsc);
-                pthread_mutex_unlock(&mutex_wejsc);
-
-                pthread_mutex_unlock(&mutex_bilety);
-
-                snprintf(buf, sizeof(buf), "Kasa %d: brak miejsc w sektorze VIP dla kibica %d — anulowano", id, k->id);
-                loguj(buf);
+                /* brak miejsc VIP — requeue lub anuluj jeśli kolejka VIP pełna */
+                int re = requeue_vip(k);
+                if(!re){
+                    k->sektor = -2;
+                    pthread_mutex_lock(&mutex_wejsc);
+                    pthread_cond_broadcast(&cond_wejsc);
+                    pthread_mutex_unlock(&mutex_wejsc);
+                    snprintf(buf, sizeof(buf), "Kasa %d: brak miejsc VIP i kolejka VIP pelna — anulowano kibica %d", id, k->id);
+                    loguj(buf);
+                } else {
+                    snprintf(buf, sizeof(buf), "Kasa %d: brak miejsc VIP — odlozono kibica %d do kolejki VIP", id, k->id);
+                    loguj(buf);
+                }
             }
 
-            usleep(20000);
+            usleep(500);
             continue;
         }
 
@@ -150,6 +198,7 @@ void* kasa(void* arg)
             }
 
             if(wybrany == -1){
+                /* nie znaleziono sektora z miejscami na całe zamówienie */
                 if(all_queue_need_two_and_no_sector()){
                     snprintf(buf, sizeof(buf), "Kasa %d: brak sektora z 2 miejscami i wszyscy w kolejce potrzebuja >=2 -> koniec symulacji", id);
                     loguj(buf);
@@ -172,6 +221,7 @@ void* kasa(void* arg)
                     break;
                 }
 
+                /* sprzedaj fallback: 1 miejsce w najlepszym sektorze (jeśli jest) */
                 int best = -1, best_free = 0;
                 for(int s=0;s<SEKTORY;s++){
                     if(miejsca[s] > best_free){
@@ -181,12 +231,10 @@ void* kasa(void* arg)
                 }
 
                 if(best_free <= 0){
-                    pthread_mutex_lock(&mutex_kolejka);
+                    /* brak miejsc w calej hali -> anuluj */
                     k->processing = 0;
-                    pthread_mutex_unlock(&mutex_kolejka);
-
                     k->sektor = -2;
-                    snprintf(buf, sizeof(buf), "Kasa %d: brak miejsc dla kibica %d — anulowano", id, k->id);
+                    snprintf(buf, sizeof(buf), "Kasa %d: brak miejsc w calej hali dla kibica %d — anulowano", id, k->id);
                     loguj(buf);
 
                     pthread_mutex_lock(&mutex_wejsc);
@@ -196,6 +244,7 @@ void* kasa(void* arg)
                     pthread_mutex_unlock(&mutex_bilety);
                     continue;
                 } else {
+                    /* sprzedaj 1 miejsce w najlepszym sektorze */
                     miejsca[best] -= 1;
                     sprzedane += 1;
                     sold_per_sector[best] += 1;
@@ -216,10 +265,11 @@ void* kasa(void* arg)
                     snprintf(buf, sizeof(buf), "DEBUG-KASA %d: fallback sprzedano 1 bilet sektor %d dla kibica %d", id, best, k->id);
                     loguj(buf);
 
-                    usleep(10000);
+                    usleep(500);
                     continue;
                 }
             } else {
+                /* sprzedaj pełne zamówienie w sektorze wybranym */
                 miejsca[wybrany] -= k->bilety;
                 sprzedane += k->bilety;
                 sold_per_sector[wybrany] += k->bilety;
@@ -240,9 +290,6 @@ void* kasa(void* arg)
                 snprintf(buf, sizeof(buf), "Kasa %d: sprzedano bilety sektor %d dla kibica %d", id, wybrany, k->id);
                 loguj(buf);
 
-                snprintf(buf, sizeof(buf), "DEBUG-KASA %d: ustawiono sektor=%d dla kibica=%d i wykonano broadcast cond_wejsc", id, wybrany, k->id);
-                loguj(buf);
-
                 if(sprzedane >= K){
                     pthread_mutex_lock(&mutex_kolejka);
                     pthread_cond_broadcast(&cond_kolejka);
@@ -252,10 +299,11 @@ void* kasa(void* arg)
                     pthread_mutex_unlock(&mutex_wejsc);
                 }
 
-                usleep(20000);
+                usleep(500);
                 continue;
             }
         } else {
+            /* kibic miał już sektor przypisany (np. z requeue) */
             if(k->sektor >= 0 && k->sektor < SEKTORY && miejsca[k->sektor] >= k->bilety){
                 miejsca[k->sektor] -= k->bilety;
                 sprzedane += k->bilety;
@@ -276,24 +324,41 @@ void* kasa(void* arg)
                 snprintf(buf, sizeof(buf), "Kasa %d: potwierdzono i sprzedano dla kibica %d sektor %d", id, k->id, k->sektor);
                 loguj(buf);
 
-                usleep(10000);
+                usleep(500);
                 continue;
             } else {
+                /* sektor nie pasuje — spróbuj ponownie wstawić do kolejki (requeue) z limitem */
                 pthread_mutex_lock(&mutex_kolejka);
                 k->processing = 0;
                 k->sektor = -1;
-                if(q_size < MAX_KOLEJKA){
-                    kolejka[q_end] = k;
-                    q_end = (q_end + 1) % MAX_KOLEJKA;
-                    q_size++;
-                    kibice_w_kolejce++;
-                    k->in_queue = 1;
-                    pthread_cond_broadcast(&cond_kolejka);
+                if(k->requeue_attempts < 3){
+                    k->requeue_attempts++;
+                    if(q_size < MAX_KOLEJKA){
+                        kolejka[q_end] = k;
+                        q_end = (q_end + 1) % MAX_KOLEJKA;
+                        q_size++;
+                        kibice_w_kolejce++;
+                        k->in_queue = 1;
+                        pthread_cond_broadcast(&cond_kolejka);
+                        snprintf(buf, sizeof(buf), "Kasa %d: requeue kibica %d (próba %d)", id, k->id, k->requeue_attempts);
+                        loguj(buf);
+                        __sync_fetch_and_add(&requeue_count, 1);
+                    } else {
+                        k->sektor = -2;
+                        pthread_mutex_lock(&mutex_wejsc);
+                        pthread_cond_broadcast(&cond_wejsc);
+                        pthread_mutex_unlock(&mutex_wejsc);
+                        snprintf(buf, sizeof(buf), "Kasa %d: kolejka pelna przy requeue — anulowano kibica %d", id, k->id);
+                        loguj(buf);
+                    }
                 } else {
+                    /* przekroczono limit requeue -> anuluj */
                     k->sektor = -2;
                     pthread_mutex_lock(&mutex_wejsc);
                     pthread_cond_broadcast(&cond_wejsc);
                     pthread_mutex_unlock(&mutex_wejsc);
+                    snprintf(buf, sizeof(buf), "Kasa %d: przekroczono requeue limit — anulowano kibica %d", id, k->id);
+                    loguj(buf);
                 }
                 pthread_mutex_unlock(&mutex_kolejka);
 
