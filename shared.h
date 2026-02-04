@@ -42,9 +42,11 @@ typedef struct {
     int stop_sektor[SEKTORY];
     int osoby_w_sektorze[SEKTORY];
 
+    /* kolejka normalna */
     int q_start, q_end, q_size;
     int q_ids[MAX_KOLEJKA];
 
+    /* kolejka VIP */
     int qv_start, qv_end, qv_size;
     int qv_ids[MAX_KOLEJKA];
 
@@ -58,6 +60,7 @@ typedef struct {
     int finished_kibice;
 
     time_t Tp;
+    int mecz_started;
 
     int ewakuacja;
     int przerwanie;
@@ -79,11 +82,10 @@ typedef struct {
 
 extern Shared *SH;
 
-/* inicjalizacja i sprzątanie pamięci współdzielonej */
-void shared_init(int K);
+void shared_init_master(int K);
+void shared_attach(void);
 void shared_cleanup(void);
 
-/* pomocnicze: msleep (milisekundy) - używa nanosleep, przenośne i bez warningów */
 static inline void msleep(int ms)
 {
     struct timespec ts;

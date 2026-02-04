@@ -12,7 +12,10 @@
 Shared *SH = NULL;
 static const char *SHM_NAME = "/hala_proc_shm";
 
-void shared_init(int K)
+/* ---------------------------------------------------------
+   MASTER — tworzy segment SHM i inicjalizuje strukturę
+   --------------------------------------------------------- */
+void shared_init_master(int K)
 {
     int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if(fd == -1){
@@ -39,7 +42,9 @@ void shared_init(int K)
     SH->finished_kibice = 0;
     SH->ewakuacja = 0;
     SH->przerwanie = 0;
+    SH->mecz_started = 0;
 
+    /* rozdział miejsc */
     int base = K / SEKTORY;
     int rem  = K % SEKTORY;
     for(int i=0;i<SEKTORY;i++){
@@ -53,12 +58,14 @@ void shared_init(int K)
         }
     }
 
+    /* VIP limit */
     SH->max_vip = (int)(0.003 * K);
     if(SH->max_vip < 1) SH->max_vip = 1;
     SH->vip_reserved = 0;
     SH->vip_sold = 0;
     SH->vip_entered = 0;
 
+    /* mutexy współdzielone */
     pthread_mutexattr_t mattr;
     pthread_mutexattr_init(&mattr);
     pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
@@ -77,9 +84,31 @@ void shared_init(int K)
     pthread_cond_init(&SH->cond_wejsc, &cattr);
     pthread_cond_init(&SH->cond_global, &cattr);
 
+    /* semafor współdzielony */
     sem_init(&SH->items_sem, 1, 0);
 }
 
+/* ---------------------------------------------------------
+   Dzieci — tylko attach
+   --------------------------------------------------------- */
+void shared_attach(void)
+{
+    int fd = shm_open(SHM_NAME, O_RDWR, 0666);
+    if(fd == -1){
+        perror("shm_open attach");
+        exit(1);
+    }
+    SH = mmap(NULL, sizeof(Shared), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if(SH == MAP_FAILED){
+        perror("mmap attach");
+        exit(1);
+    }
+    close(fd);
+}
+
+/* ---------------------------------------------------------
+   Sprzątanie
+   --------------------------------------------------------- */
 void shared_cleanup(void)
 {
     if(SH){
