@@ -11,17 +11,16 @@
 
 /*
     ============================================================
-    PRACOWNIK TECHNICZNY — WERSJA POPRAWIONA
+    PRACOWNIK TECHNICZNY — WERSJA Z OBSŁUGĄ SEKTORA VIP (A1‑V1)
     ============================================================
 
-    Najważniejsze zmiany:
+    Zmiany:
 
-    ✔ Reaguje natychmiast na SH->przerwanie i SH->ewakuacja  
-    ✔ Kończy się natychmiast po sygnale 3 (ewakuacja)  
-    ✔ WYSYŁA kill(0, SIGTERM) po ewakuacji — to budzi kasy/kibiców  
-    ✔ Nie blokuje się na fdopen/fscanf po sygnale  
-    ✔ Nie pozostawia zombie  
-    ✔ Nie blokuje procesu głównego w wait()  
+    ✔ sektor VIP = 8 jest pełnoprawnym sektorem
+    ✔ sektor VIP NIE podlega zatrzymaniu/wznowieniu wejścia
+    ✔ sektor VIP NIE ma kontroli wejścia
+    ✔ ewakuacja obejmuje wszystkie sektory 0–8
+    ✔ techniczny wysyła kill(0, SIGTERM) po sygnale 3
 */
 
 static void sig_handler(int sig)
@@ -61,9 +60,9 @@ void proc_techniczny(int read_fd)
         ---------------------------------------------------------
 
         Sygnały:
-        1 — zatrzymanie wejścia do sektora
-        2 — wznowienie wejścia
-        3 — ewakuacja (natychmiastowe zakończenie symulacji)
+        1 — zatrzymanie wejścia do sektora (0–7)
+        2 — wznowienie wejścia (0–7)
+        3 — ewakuacja (0–8)
     */
 
     while (!SH->przerwanie && fscanf(f, "%d %d", &cmd, &sektor) == 2) {
@@ -73,7 +72,9 @@ void proc_techniczny(int read_fd)
 
         /* ---------------- sygnal 1 — zatrzymanie wejścia ---------------- */
         if (cmd == 1) {
-            if (sektor >= 0 && sektor < SEKTORY) {
+
+            /* sektor VIP (8) ignoruje zatrzymania */
+            if (sektor >= 0 && sektor < 8) {
 
                 pthread_mutex_lock(&SH->mutex_wejsc);
 
@@ -88,7 +89,9 @@ void proc_techniczny(int read_fd)
 
         /* ---------------- sygnal 2 — wznowienie wejścia ---------------- */
         else if (cmd == 2) {
-            if (sektor >= 0 && sektor < SEKTORY) {
+
+            /* sektor VIP (8) ignoruje wznowienia */
+            if (sektor >= 0 && sektor < 8) {
 
                 pthread_mutex_lock(&SH->mutex_wejsc);
 
@@ -108,7 +111,7 @@ void proc_techniczny(int read_fd)
 
             SH->ewakuacja = 1;
 
-            /* opróżnienie sektorów */
+            /* opróżnienie WSZYSTKICH sektorów 0–8 */
             for (int s = 0; s < SEKTORY; s++) {
                 if (SH->osoby_w_sektorze[s] > 0) {
                     loguj("Techniczny: sektor %d opuszcza %d osob",

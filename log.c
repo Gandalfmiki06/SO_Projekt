@@ -7,8 +7,13 @@
 #include <stdarg.h>
 #include <time.h>
 
+/* Plik raportu */
 static const char *LOG_FILE = "raport_proc.txt";
 
+/* ---------------------------------------------------------
+   loguj(fmt, ...)
+   Zapisuje linię do raportu z timestampem i PID.
+   --------------------------------------------------------- */
 void loguj(const char *fmt, ...)
 {
     va_list ap;
@@ -28,44 +33,57 @@ void loguj(const char *fmt, ...)
 
     pthread_mutex_lock(&SH->mutex_log);
     FILE *f = fopen(LOG_FILE, "a");
-    if(f){
+    if (f) {
         fprintf(f, "%s\n", buf);
         fclose(f);
     }
     pthread_mutex_unlock(&SH->mutex_log);
 }
 
+/* ---------------------------------------------------------
+   zapisz_podsumowanie()
+   Końcowy raport z całej symulacji.
+   --------------------------------------------------------- */
 void zapisz_podsumowanie(void)
 {
     pthread_mutex_lock(&SH->mutex_log);
-    FILE *f = fopen("raport_proc.txt", "a");
-    if(!f){
+    FILE *f = fopen(LOG_FILE, "a");
+    if (!f) {
         pthread_mutex_unlock(&SH->mutex_log);
         return;
     }
 
     fprintf(f, "\n===== PODSUMOWANIE =====\n");
-    fprintf(f, "K = %d\n", SH->K);
-    fprintf(f, "Sprzedane: %d\n", SH->sprzedane);
 
-    fprintf(f, "VIP reserved: %d\n", SH->vip_reserved);
-    fprintf(f, "VIP sold: %d\n", SH->vip_sold);
-    fprintf(f, "VIP entered: %d\n", SH->vip_entered);
+    fprintf(f, "K (sektory 0–7) = %d\n", SH->K);
+    fprintf(f, "Sprzedane (łącznie, z VIP) = %d\n", SH->sprzedane);
+
+    fprintf(f, "VIP reserved (osoby): %d\n", SH->vip_reserved);
+    fprintf(f, "VIP sold (bilety): %d\n", SH->vip_sold);
+    fprintf(f, "VIP entered (bilety): %d\n", SH->vip_entered);
 
     fprintf(f, "Normalni: %d\n", SH->stat_normalni);
     fprintf(f, "Dzieci: %d\n", SH->stat_dzieci);
-    fprintf(f, "Weszli: %d\n", SH->stat_wejsc);
+    fprintf(f, "Weszli (zwykli): %d\n", SH->stat_wejsc);
     fprintf(f, "VIP wejscia: %d\n", SH->stat_vip_wejsc);
 
-    fprintf(f, "Sprzedane na sektorach: ");
-    for(int s=0; s<SEKTORY; s++){
-        fprintf(f, "%d%s", SH->sold_per_sector[s], (s < SEKTORY-1 ? "; " : "\n"));
+    fprintf(f, "\nSprzedane na sektorach:\n");
+    for (int s = 0; s < SEKTORY; s++) {
+        if (s == SEKTOR_VIP)
+            fprintf(f, "  sektor %d (VIP): %d\n", s, SH->sold_per_sector[s]);
+        else
+            fprintf(f, "  sektor %d: %d\n", s, SH->sold_per_sector[s]);
     }
 
-    fprintf(f, "Miejsca pozostale na sektory: ");
-    for(int s=0; s<SEKTORY; s++){
-        fprintf(f, "%d%s", SH->miejsca[s], (s < SEKTORY-1 ? "; " : "\n"));
+    fprintf(f, "\nMiejsca pozostale:\n");
+    for (int s = 0; s < SEKTORY; s++) {
+        if (s == SEKTOR_VIP)
+            fprintf(f, "  sektor %d (VIP): %d\n", s, SH->miejsca[s]);
+        else
+            fprintf(f, "  sektor %d: %d\n", s, SH->miejsca[s]);
     }
+
+    fprintf(f, "\n===== KONIEC RAPORTU =====\n\n");
 
     fclose(f);
     pthread_mutex_unlock(&SH->mutex_log);

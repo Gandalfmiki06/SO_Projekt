@@ -12,20 +12,17 @@
 
 /*
     ============================================================
-    KASA — WERSJA POPRAWIONA
+    KASA — WERSJA Z POPRAWIONĄ OBSŁUGĄ VIP (A1‑V1 + S1)
     ============================================================
 
-    Najważniejsze zmiany:
+    Zmiany:
 
-    ✔ Każda pętla sprawdza SH->przerwanie i SH->ewakuacja
-    ✔ sem_wait() obsługuje EINTR (przerwanie sygnałem)
-    ✔ kasa kończy się NATYCHMIAST po ewakuacji
-    ✔ zero wiszących procesów
-    ✔ zero blokad semaforów
-    ✔ zero zombie
-    ✔ main może zebrać wszystkie dzieci → podsumowanie wypisuje się samo
-
-    To jest kluczowy element stabilności całej symulacji.
+    ✔ Kasy NIE obsługują VIP
+    ✔ VIP nie używają kolejki ani semafora
+    ✔ Kasy obsługują wyłącznie zwykłych kibiców
+    ✔ VIP nie wpływają na liczbę czynnych kas
+    ✔ VIP nie mogą trafić do queue_pop()
+    ✔ VIP nie mogą być sprzedani przez kasę
 */
 
 static void sig_handler(int sig)
@@ -35,7 +32,7 @@ static void sig_handler(int sig)
 }
 
 /* ---------------------------------------------------------
-   Pobranie kibica z kolejki (VIP ma pierwszeństwo)
+   Pobranie zwykłego kibica z kolejki
    --------------------------------------------------------- */
 static int queue_pop(void)
 {
@@ -43,14 +40,7 @@ static int queue_pop(void)
 
     int kid = -1;
 
-    /* VIP najpierw */
-    if (SH->qv_size > 0) {
-        kid = SH->qv_ids[SH->qv_start];
-        SH->qv_start = (SH->qv_start + 1) % MAX_KOLEJKA;
-        SH->qv_size--;
-    }
-    /* potem normalni */
-    else if (SH->q_size > 0) {
+    if (SH->q_size > 0) {
         kid = SH->q_ids[SH->q_start];
         SH->q_start = (SH->q_start + 1) % MAX_KOLEJKA;
         SH->q_size--;
@@ -98,12 +88,10 @@ void proc_kasa(int id)
 
         /* -----------------------------------------------------
            sem_wait — MUSI obsługiwać EINTR
-           inaczej kasa będzie wisieć po sygnale
            ----------------------------------------------------- */
         int r = sem_wait(&SH->items_sem);
 
         if (r == -1 && errno == EINTR) {
-            /* przerwane sygnałem → sprawdź flagi i ewentualnie wyjdź */
             if (SH->przerwanie || SH->ewakuacja)
                 break;
             continue;
@@ -122,12 +110,21 @@ void proc_kasa(int id)
         Kibic *k = &SH->kibice[kid];
 
         /* -----------------------------------------------------
+           Kasa obsługuje TYLKO zwykłych kibiców
+           ----------------------------------------------------- */
+        if (k->vip) {
+            /* VIP nie powinien tu trafić */
+            loguj("Kasa %d: BLAD — VIP w kolejce (kid=%d)", id, kid);
+            continue;
+        }
+
+        /* -----------------------------------------------------
            Sprzedaż biletu
            ----------------------------------------------------- */
         pthread_mutex_lock(&SH->mutex_bilety);
 
-        /* brak miejsc w całej hali */
-        if (SH->sprzedane >= SH->K) {
+        /* brak miejsc w całej hali (sektory 0–7 + VIP) */
+        if (SH->sprzedane >= SH->K + SH->max_vip * 2) {
             pthread_mutex_unlock(&SH->mutex_bilety);
             k->sektor = -2;
             k->has_ticket = 0;
@@ -143,7 +140,6 @@ void proc_kasa(int id)
 
             Kibic *g = &SH->kibice[k->guardian_id];
 
-            /* opiekun nie ma biletu → dziecko odpada */
             if (!g->has_ticket || g->sektor < 0) {
                 pthread_mutex_unlock(&SH->mutex_bilety);
                 k->sektor = -2;
@@ -153,7 +149,14 @@ void proc_kasa(int id)
 
             int s = g->sektor;
 
-            /* brak miejsc w sektorze opiekuna */
+            if (s == SEKTOR_VIP) {
+                /* dziecko nie może wejść do sektora VIP */
+                pthread_mutex_unlock(&SH->mutex_bilety);
+                k->sektor = -2;
+                k->has_ticket = 0;
+                continue;
+            }
+
             if (SH->miejsca[s] < k->bilety) {
                 pthread_mutex_unlock(&SH->mutex_bilety);
                 k->sektor = -2;
@@ -165,12 +168,12 @@ void proc_kasa(int id)
         }
         else {
             /* -----------------------------------------------------
-               Normalny kibic — wybór sektora z wolnymi miejscami
+               Normalny kibic — wybór sektora 0–7
                ----------------------------------------------------- */
-            int avail[SEKTORY];
+            int avail[8];
             int ac = 0;
 
-            for (int s = 0; s < SEKTORY; s++) {
+            for (int s = 0; s < 8; s++) {
                 if (SH->miejsca[s] >= k->bilety)
                     avail[ac++] = s;
             }
@@ -196,9 +199,7 @@ void proc_kasa(int id)
         k->has_ticket = 1;
 
         /* statystyki */
-        if (k->vip)
-            SH->vip_sold += k->bilety;
-        else if (k->is_child)
+        if (k->is_child)
             SH->stat_dzieci += k->bilety;
         else
             SH->stat_normalni += k->bilety;
@@ -211,7 +212,7 @@ void proc_kasa(int id)
         /* -----------------------------------------------------
            Jeśli hala pełna — kasa kończy pracę
            ----------------------------------------------------- */
-        if (SH->sprzedane >= SH->K)
+        if (SH->sprzedane >= SH->K + SH->max_vip * 2)
             break;
     }
 

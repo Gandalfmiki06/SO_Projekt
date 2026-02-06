@@ -5,68 +5,76 @@
 #include <semaphore.h>
 #include <time.h>
 
-#define SEKTORY 8
-#define MAX_KOLEJKA 2000
+/* 8 sektorów zwykłych + 1 sektor VIP */
+#define SEKTORY 9
+#define SEKTOR_VIP 8
+
+#define MAX_KOLEJKA 200000
 #define MAX_KASY 10
 
 typedef struct {
     int id;
-    int vip;
+    int vip;            /* 1 = VIP */
     int wiek;
-    int druzyna;
-    int bilety;
-    int sektor;          /* -1 brak, -2 anulowany, >=0 sektor */
-    int has_ticket;      /* 1 gdy kasa przydzieliła bilety */
-    int guardian_id;     /* id opiekuna */
-    int is_child;        /* 1 jeśli <15 */
+    int druzyna;        /* -1 dla VIP */
+    int bilety;         /* 1 lub 2 */
+    int sektor;         /* 0–7 zwykłe, 8 = VIP, -1 brak, -2 odrzucony */
+    int has_ticket;     /* 1 gdy kasa/VIP przydzieliła bilety */
+    int guardian_id;    /* id opiekuna */
+    int is_child;       /* 1 jeśli <15 */
     int pass_count;
     int entered;
 } Kibic;
 
 typedef struct {
-    int K;
-    int miejsca[SEKTORY];
-    int sprzedane;
+
+    /* --- Pojemność stadionu --- */
+    int K;                          /* pojemność sektorów 0–7 */
+    int miejsca[SEKTORY];           /* miejsca w sektorach 0–7 i sektorze VIP */
+    int sprzedane;                  /* łącznie sprzedane bilety (z VIP) */
     int sold_per_sector[SEKTORY];
 
-    int max_vip;
-    int vip_reserved;
-    int vip_sold;
-    int vip_entered;
+    /* --- VIP --- */
+    int max_vip;                    /* liczba VIP (osób), nie biletów */
+    int vip_reserved;               /* ilu VIP wygenerowano */
+    int vip_sold;                   /* ile biletów VIP sprzedano */
+    int vip_entered;                /* ile biletów VIP weszło */
 
+    /* --- Statystyki --- */
     int stat_normalni;
     int stat_dzieci;
     int stat_wejsc;
     int stat_vip_wejsc;
 
-    int stop_sektor[SEKTORY];
+    /* --- Kontrola wejścia (tylko sektory 0–7) --- */
+    int stop_sektor[SEKTORY];       /* sektor VIP ignoruje kontrolę */
     int osoby_w_sektorze[SEKTORY];
-
-    /* kolejka normalna */
-    int q_start, q_end, q_size;
-    int q_ids[MAX_KOLEJKA];
-
-    /* kolejka VIP */
-    int qv_start, qv_end, qv_size;
-    int qv_ids[MAX_KOLEJKA];
-
-    Kibic kibice[MAX_KOLEJKA];
-    int next_kibic_id;
 
     int stanowisko_count[SEKTORY][2];
     int stanowisko_druzyna[SEKTORY][2];
 
+    /* --- Kolejki (VIP nie używają kolejki) --- */
+    int q_start, q_end, q_size;
+    int q_ids[MAX_KOLEJKA];
+
+    Kibic kibice[MAX_KOLEJKA];
+    int next_kibic_id;
+
+    /* --- Kibice --- */
     int total_kibice;
     int finished_kibice;
 
+    /* --- Czas meczu --- */
     time_t Tp;
     int mecz_started;
 
+    /* --- Sterowanie --- */
     int ewakuacja;
     int przerwanie;
 
     int czynne_kasy;
 
+    /* --- Synchronizacja --- */
     pthread_mutex_t mutex_log;
     pthread_mutex_t mutex_kolejka;
     pthread_mutex_t mutex_bilety;
@@ -77,7 +85,8 @@ typedef struct {
     pthread_cond_t cond_wejsc;
     pthread_cond_t cond_global;
 
-    sem_t items_sem;
+    sem_t items_sem; /* tylko dla zwykłych kibiców */
+
 } Shared;
 
 extern Shared *SH;

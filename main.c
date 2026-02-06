@@ -25,7 +25,7 @@ static void sig_handler(int sig)
 }
 
 /* ---------------------------------------------------------
-   TRYBY RÓL (po exec) – bez setpgid
+   TRYBY RÓL (po exec)
    --------------------------------------------------------- */
 static void run_role(int argc, char **argv)
 {
@@ -102,29 +102,52 @@ int main(int argc, char **argv)
          !strcmp(argv[1], "kasa") ||
          !strcmp(argv[1], "kibic"))) {
         run_role(argc, argv);
-        /* proc_* nie wracają */
         return 0;
     }
 
     /* tu jesteśmy tylko w procesie głównym */
     setpgid(0, 0);
 
-    int K = 80;
-    int NUM_KIBIC = 120;
+    int K = 80000;       /* pojemność sektorów 0–7 */
+    int NUM_KIBIC = 60000;
 
     if (argc >= 2) {
-        int v = atoi(argv[1]);
-        if (v > 0) K = v;
+    char *end;
+    long v = strtol(argv[1], &end, 10);
+
+    if (*end != '\0' || v <= 0 || v > 500000) {
+        fprintf(stderr,
+            "Blad: pierwszy argument (K) musi byc liczba dodatnia 1–500000.\n");
+        return 1;
     }
-    if (argc >= 3) {
-        int v = atoi(argv[2]);
-        if (v > 0) NUM_KIBIC = v;
+    K = (int)v;
+}
+
+if (argc >= 3) {
+    char *end;
+    long v = strtol(argv[2], &end, 10);
+
+    if (*end != '\0' || v <= 0 || v > 500000) {
+        fprintf(stderr,
+            "Blad: drugi argument (liczba kibicow) musi byc liczba dodatnia 1–500000.\n");
+        return 1;
     }
+    NUM_KIBIC = (int)v;
+}
+
+if (NUM_KIBIC > K * 2) {
+    fprintf(stderr,
+        "Blad: liczba kibicow (%d) jest zbyt duza w stosunku do pojemnosci stadionu (%d).\n",
+        NUM_KIBIC, K);
+    return 1;
+}
+
 
     unlink("raport_proc.txt");
 
     shared_init_master(K);
 
+    /* mecz startuje za 10 sekund */
     SH->Tp = time(NULL) + 10;
     {
         char tbuf[128];
@@ -208,22 +231,24 @@ int main(int argc, char **argv)
         k->has_ticket = 0;
         k->guardian_id = -1;
         k->is_child = (k->wiek < 15);
-        k->vip = 0;
         k->pass_count = 0;
         k->entered = 0;
 
-        if (SH->vip_reserved < SH->max_vip) {
+        /* VIP — tylko dorośli */
+        if (!k->is_child && SH->vip_reserved < SH->max_vip) {
             int r = rand() % 1000;
-            if (r < (int)(0.3 * 10)) {
+            if (r < 3) { /* 0.3% */
                 k->vip = 1;
-                SH->vip_reserved += k->bilety;
+                k->druzyna = -1;
+                SH->vip_reserved++;
             }
         }
 
+        /* dzieci szukają opiekuna */
         if (k->is_child && id > 0) {
             for (int j = id - 1; j >= 0; j--) {
                 Kibic *cand = &SH->kibice[j];
-                if (cand->wiek >= 18) {
+                if (cand->wiek >= 18 && !cand->vip) {
                     k->guardian_id = cand->id;
                     break;
                 }
@@ -242,42 +267,49 @@ int main(int argc, char **argv)
         msleep(1);
     }
 
-    /* klasyczne czekanie na wszystkie dzieci tego procesu */
+    /* czekanie na wszystkie dzieci */
     int status;
-    while (wait(&status) > 0) {
-        /* nic – po prostu zbieramy dzieci */
-    }
+    while (wait(&status) > 0) {}
 
     if (got_signal)
         loguj("Odebrano sygnal, przerwanie=1");
 
     zapisz_podsumowanie();
 
-    printf("\n\033[1;33m===== PODSUMOWANIE (terminal) =====\033[0m\n");
+    printf("\n\033[1;33m===== PODSUMOWANIE (terminal) =====\033[0m\n\n");
 
-    printf("\033[1;32mK =\033[0m %d\n", SH->K);
-    printf("\033[1;36mSprzedane:\033[0m %d\n", SH->sprzedane);
+printf("\033[1;32mPojemnosc sektorow 0–7:\033[0m %d\n", SH->K);
+printf("\033[1;32mSprzedane bilety (lacznie, z VIP):\033[0m %d\n\n", SH->sprzedane);
 
-    printf("\033[1;32mVIP reserved:\033[0m %d\n", SH->vip_reserved);
-    printf("\033[1;32mVIP sold:\033[0m %d\n", SH->vip_sold);
-    printf("\033[1;32mVIP entered:\033[0m %d\n", SH->vip_entered);
+printf("\033[1;35m--- VIP ---\033[0m\n");
+printf("VIP reserved (osoby):   \033[1;36m%d\033[0m\n", SH->vip_reserved);
+printf("VIP sold (bilety):      \033[1;36m%d\033[0m\n", SH->vip_sold);
+printf("VIP entered (bilety):   \033[1;36m%d\033[0m\n\n", SH->vip_entered);
 
-    printf("\033[1;32mNormalni:\033[0m %d\n", SH->stat_normalni);
-    printf("\033[1;32mDzieci:\033[0m %d\n", SH->stat_dzieci);
-    printf("\033[1;36mWeszli:\033[0m %d\n", SH->stat_wejsc);
-    printf("\033[1;36mVIP wejscia:\033[0m %d\n", SH->stat_vip_wejsc);
+printf("\033[1;35m--- Statystyki zwykle ---\033[0m\n");
+printf("Normalni:               \033[1;36m%d\033[0m\n", SH->stat_normalni);
+printf("Dzieci:                 \033[1;36m%d\033[0m\n", SH->stat_dzieci);
+printf("Weszli (zwykli):        \033[1;36m%d\033[0m\n", SH->stat_wejsc);
+printf("VIP wejscia:            \033[1;36m%d\033[0m\n\n", SH->stat_vip_wejsc);
 
-    printf("\033[1;34mSprzedane na sektorach:\033[0m ");
-    for (int s = 0; s < SEKTORY; s++) {
-        printf("%d%s", SH->sold_per_sector[s], (s < SEKTORY - 1 ? "; " : "\n"));
-    }
+printf("\033[1;34mSprzedane na sektorach:\033[0m\n");
+for (int s = 0; s < SEKTORY; s++) {
+    if (s == SEKTOR_VIP)
+        printf("  sektor %d (VIP): \033[1;36m%d\033[0m\n", s, SH->sold_per_sector[s]);
+    else
+        printf("  sektor %d:        \033[1;36m%d\033[0m\n", s, SH->sold_per_sector[s]);
+}
 
-    printf("\033[1;34mMiejsca pozostale na sektory:\033[0m ");
-    for (int s = 0; s < SEKTORY; s++) {
-        printf("%d%s", SH->miejsca[s], (s < SEKTORY - 1 ? "; " : "\n"));
-    }
+printf("\n\033[1;34mMiejsca pozostale:\033[0m\n");
+for (int s = 0; s < SEKTORY; s++) {
+    if (s == SEKTOR_VIP)
+        printf("  sektor %d (VIP): \033[1;36m%d\033[0m\n", s, SH->miejsca[s]);
+    else
+        printf("  sektor %d:        \033[1;36m%d\033[0m\n", s, SH->miejsca[s]);
+}
 
-    printf("\n");
+printf("\n\033[1;33m===== KONIEC PODSUMOWANIA =====\033[0m\n\n");
+
 
     shared_cleanup();
 

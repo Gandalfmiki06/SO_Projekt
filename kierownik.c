@@ -9,6 +9,19 @@
 #include <stdio.h>
 #include <signal.h>
 
+/*
+    ============================================================
+    KIEROWNIK — WERSJA Z OBSŁUGĄ SEKTORA VIP (A1‑V1)
+    ============================================================
+
+    Zmiany:
+
+    ✔ kierownik NIE wysyła sygnałów 1/2 do sektora VIP (8)
+    ✔ sektor VIP nie podlega kontroli wejścia
+    ✔ sektor VIP nie jest zatrzymywany ani wznawiany
+    ✔ ewakuacja obejmuje wszystkie sektory 0–8
+*/
+
 static void sig_handler(int sig)
 {
     (void)sig;
@@ -17,9 +30,9 @@ static void sig_handler(int sig)
 
 /*
    Komunikaty do technicznego:
-   "1 s\n" - sygnal1, zatrzymanie wejścia do sektora s
-   "2 s\n" - sygnal2, wznowienie wejścia do sektora s
-   "3 -1\n" - sygnal3, ewakuacja
+   "1 s\n" - sygnal1, zatrzymanie wejścia do sektora s (0–7)
+   "2 s\n" - sygnal2, wznowienie wejścia do sektora s (0–7)
+   "3 -1\n" - sygnal3, ewakuacja (0–8)
 */
 static void send_cmd(int fd, int cmd, int sektor)
 {
@@ -49,7 +62,7 @@ void proc_kierownik(int write_fd)
 
         /* --- Sterowanie liczbą kas --- */
         pthread_mutex_lock(&SH->mutex_kolejka);
-        int q = SH->q_size + SH->qv_size;
+        int q = SH->q_size;
         pthread_mutex_unlock(&SH->mutex_kolejka);
 
         int baza = SH->K / 10;
@@ -78,9 +91,10 @@ void proc_kierownik(int write_fd)
         }
         pthread_mutex_unlock(&SH->mutex_global);
 
-        /* --- Losowe zatrzymanie/wznowienie wejść do sektorów --- */
+        /* --- Losowe zatrzymanie/wznowienie wejść do sektorów 0–7 --- */
         if (rand_r(&seed) % 20 == 0) {
-            int s = rand_r(&seed) % SEKTORY;
+
+            int s = rand_r(&seed) % 8; /* tylko sektory 0–7 */
             int akcja = rand_r(&seed) % 2; /* 0 = stop, 1 = start */
 
             send_cmd(write_fd, (akcja == 0 ? 1 : 2), s);

@@ -12,20 +12,20 @@
 
 /*
     ============================================================
-    KIBIC — WERSJA POPRAWIONA
+    KIBIC — WERSJA Z POPRAWNĄ OBSŁUGĄ VIP (A1‑V1 + S1)
     ============================================================
 
-    Najważniejsze zmiany:
+    Zmiany:
 
-    ✔ Każda pętla sprawdza SH->przerwanie i SH->ewakuacja
-    ✔ Każde sem_wait / oczekiwanie reaguje na EINTR
-    ✔ Kibic kończy się NATYCHMIAST po ewakuacji
-    ✔ Zero wiszących procesów
-    ✔ Zero blokad semaforów
-    ✔ Zero zombie
-    ✔ Gwarancja, że main może zebrać wszystkie dzieci
-
-    To jest klucz do tego, żeby podsumowanie wypisało się samo.
+    ✔ VIP nie używają kolejki
+    ✔ VIP kupują bilet natychmiast (bez kas)
+    ✔ VIP zawsze dostają sektor 8
+    ✔ VIP nie przechodzą kontroli
+    ✔ VIP nie mogą być dziećmi
+    ✔ VIP nie używają semaforów
+    ✔ VIP nie mają pass_count
+    ✔ VIP są liczeni w sprzedanych miejscach
+    ✔ VIP są ewakuowani jak inni
 */
 
 static void sig_handler(int sig)
@@ -35,9 +35,9 @@ static void sig_handler(int sig)
 }
 
 /* ---------------------------------------------------------
-   Dodanie do kolejki (VIP lub normalnej)
+   Dodanie zwykłego kibica do kolejki
    --------------------------------------------------------- */
-static int queue_push(int vip, int kid)
+static int queue_push_normal(int kid)
 {
     if (SH->przerwanie || SH->ewakuacja)
         return 0;
@@ -46,20 +46,11 @@ static int queue_push(int vip, int kid)
 
     int ok = 0;
 
-    if (vip) {
-        if (SH->qv_size < MAX_KOLEJKA) {
-            SH->qv_ids[SH->qv_end] = kid;
-            SH->qv_end = (SH->qv_end + 1) % MAX_KOLEJKA;
-            SH->qv_size++;
-            ok = 1;
-        }
-    } else {
-        if (SH->q_size < MAX_KOLEJKA) {
-            SH->q_ids[SH->q_end] = kid;
-            SH->q_end = (SH->q_end + 1) % MAX_KOLEJKA;
-            SH->q_size++;
-            ok = 1;
-        }
+    if (SH->q_size < MAX_KOLEJKA) {
+        SH->q_ids[SH->q_end] = kid;
+        SH->q_end = (SH->q_end + 1) % MAX_KOLEJKA;
+        SH->q_size++;
+        ok = 1;
     }
 
     pthread_mutex_unlock(&SH->mutex_kolejka);
@@ -71,23 +62,58 @@ static int queue_push(int vip, int kid)
 }
 
 /* ---------------------------------------------------------
-   Przejście kontroli wejścia
+   VIP kupuje bilet natychmiast (bez kolejki, bez kas)
+   --------------------------------------------------------- */
+static void vip_buy_ticket(Kibic *k)
+{
+    pthread_mutex_lock(&SH->mutex_bilety);
+
+    /* sprawdzenie miejsc w sektorze VIP */
+    if (SH->miejsca[SEKTOR_VIP] >= k->bilety) {
+
+        SH->miejsca[SEKTOR_VIP] -= k->bilety;
+        SH->sprzedane += k->bilety;
+        SH->sold_per_sector[SEKTOR_VIP] += k->bilety;
+
+        SH->vip_sold += k->bilety;
+
+        k->sektor = SEKTOR_VIP;
+        k->has_ticket = 1;
+
+        loguj("Kibic %d (VIP): kupil bilet natychmiast, sektor VIP", k->id);
+    }
+    else {
+        /* brak miejsc w sektorze VIP */
+        k->sektor = -2;
+        k->has_ticket = 0;
+    }
+
+    pthread_mutex_unlock(&SH->mutex_bilety);
+}
+
+/* ---------------------------------------------------------
+   Przejście kontroli wejścia (VIP pomijają)
    --------------------------------------------------------- */
 static void przejdz_kontrole(Kibic *k)
 {
     if (SH->przerwanie || SH->ewakuacja)
         _exit(0);
 
-    /* VIP wchodzą bez kontroli */
+    /* --- VIP wchodzą bez kontroli --- */
     if (k->vip) {
         pthread_mutex_lock(&SH->mutex_wejsc);
+
         SH->vip_entered += k->bilety;
         SH->stat_vip_wejsc += k->bilety;
+        SH->osoby_w_sektorze[SEKTOR_VIP] += k->bilety;
+
         pthread_mutex_unlock(&SH->mutex_wejsc);
 
         loguj("Kibic %d (VIP): wszedl bez kontroli", k->id);
         return;
     }
+
+    /* --- Zwykły kibic --- */
 
     int s = k->sektor;
     if (s < 0 || s >= SEKTORY)
@@ -179,8 +205,30 @@ void proc_kibic(int kid)
 
     Kibic *k = &SH->kibice[kid];
 
-    /* próba wejścia do kolejki */
-    if (!queue_push(k->vip, kid))
+    /* --- VIP --- */
+    if (k->vip) {
+
+        /* VIP nie mogą być dziećmi */
+        if (k->is_child)
+            _exit(0);
+
+        vip_buy_ticket(k);
+
+        if (!k->has_ticket || k->sektor == -2)
+            _exit(0);
+
+        przejdz_kontrole(k);
+
+        pthread_mutex_lock(&SH->mutex_global);
+        SH->finished_kibice++;
+        pthread_mutex_unlock(&SH->mutex_global);
+
+        _exit(0);
+    }
+
+    /* --- Zwykły kibic --- */
+
+    if (!queue_push_normal(kid))
         _exit(0);
 
     time_t start = time(NULL);
@@ -228,10 +276,8 @@ void proc_kibic(int kid)
     if (SH->przerwanie || SH->ewakuacja)
         _exit(0);
 
-    /* przejście kontroli */
     przejdz_kontrole(k);
 
-    /* oznaczamy kibica jako zakończonego */
     pthread_mutex_lock(&SH->mutex_global);
     SH->finished_kibice++;
     pthread_mutex_unlock(&SH->mutex_global);
